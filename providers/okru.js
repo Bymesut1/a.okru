@@ -10,6 +10,8 @@ var AYAR = {
   EKLENTI_ADI: 'okru',   // manifest adıyla AYNI: akış kartında eklenti adı hep görünsün
   // true iken akış çıkmazsa neden çıkmadığını yazan "DEBUG" satırları görünür. Her şey çalışınca false yap.
   // ok.ru'nun kendi arama/profil sayfaları artık boş JS kabuğu döndürüyor (v1.0.9: arama motorları + video sayfası metadata'sı ile doğrulama)
+  ILK_KALITE: 720,   // hızlı başlangıç: liste başına bu çözünürlüğe en yakın (altındaki) akış konur; 1080p+ ağır dosyalar buffering yapıyordu
+  GARANTI_BEKLE: 2500, // ms: garanti akış hazır olunca arama için en fazla bu kadar daha beklenir (eskiden 12000)
   MOTOR_SORGU: 10,   // arama motorlarına en fazla kaç sorgu gitsin; MOTOR_SURE: bu aşamanın üst sınırı (ms)
   MOTOR_SURE: 7500,
   ARAMA_MOTORU: true,
@@ -47,7 +49,7 @@ var AYAR = {
   BELIRSIZ_GOSTER: true,  // dili doğrulanamayan adaylar "Dil ?" etiketiyle en sona eklensin
   MAX_BELIRSIZ: 12,
   ARAMA_SURESI: 8000,  // ms
-  GENEL_SURE: 26000,    // ms: dolunca o ana kadar bulunan akışlar VERİLİR (boş dönmez)
+  GENEL_SURE: 15000,    // ms: dolunca o ana kadar bulunan akışlar VERİLİR (boş dönmez)
   KAYNAK_SURESI: 4500, // ms
   MOTOR_ADAY: 16       // arama motorundan gelen en fazla kaç video doğrulansın
 };
@@ -1237,12 +1239,27 @@ function hedgeMeta(item, modes, gap) {
 }
 
 function fetchMeta(item, masaustu) {
-  return hedgeMeta(item, masaustu ? ['page-d', 'embed', 'page-m'] : ['embed', 'page-m', 'page-d'], 1800);
+  return hedgeMeta(item, masaustu ? ['page-d', 'embed', 'page-m'] : ['embed', 'page-m', 'page-d'], 900);
 }
 
 function heightOf(key) {
   var m = String(key || '').match(/(\d{3,4})/);
   return m ? parseInt(m[1], 10) : 0;
+}
+
+
+// Hızlı başlangıç sırası: [ILK_KALITE'ye en yakın altındaki mp4/HLS] -> Auto (HLS/DASH, ağa göre uyar) -> daha yüksekler (küçükten büyüğe) -> kalan düşükler
+function hizliSirala(list) {
+  var lim = AYAR.ILK_KALITE || 720, ilk = null;
+  list.forEach(function (s) {
+    var h = heightOf(s.quality);
+    if (h > 0 && h <= lim && (!ilk || h > heightOf(ilk.quality) || (h === heightOf(ilk.quality) && s.type === 'mp4' && ilk.type !== 'mp4'))) ilk = s;
+  });
+  var auto = list.filter(function (s) { return s !== ilk && !heightOf(s.quality); });
+  var yuksek = list.filter(function (s) { return s !== ilk && heightOf(s.quality) > lim; }).sort(function (a, b) { return heightOf(a.quality) - heightOf(b.quality); });
+  var dusuk = list.filter(function (s) { return s !== ilk && heightOf(s.quality) > 0 && heightOf(s.quality) <= lim; }).sort(function (a, b) { return heightOf(b.quality) - heightOf(a.quality); });
+  if (ilk) ilk.title = String(ilk.title) + ' | \u26A1 Hızlı başlangıç';
+  return (ilk ? [ilk] : []).concat(auto, yuksek, dusuk);
 }
 
 function fmtDur(sec) {
@@ -1342,11 +1359,11 @@ function makeStreams(item, ranked, meta) {
     if (AYAR.DEBUG_MODU) dx.push('[' + item.title.slice(0, 60) + ']');
     extras.push({ name: AYAR.EKLENTI_ADI + ' - ' + ranked.lang + ' DASH', title: dx.join(' | '), url: meta.dash, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
   }
-  if (!vids.length) return extras;
+  if (!vids.length) return hizliSirala(extras);
 
   // videonun TÜM çözünürlükleri (en yüksekten düşüğe)
   var picks = vids;
-  return picks.map(function (v) {
+  return hizliSirala(picks.map(function (v) {
     var label = parts.concat([v.key || 'Auto']);
     if (dur) label.push(dur);
     if (AYAR.DEBUG_MODU) label.push('[' + item.title.slice(0, 60) + ']');
@@ -1359,7 +1376,7 @@ function makeStreams(item, ranked, meta) {
       headers: headers,
       provider: PROVIDER_ID
     };
-  }).concat(extras);
+  }).concat(extras));
 }
 
 // ============================================================
@@ -1494,7 +1511,7 @@ function garantiMeta(id) {
   var c = GARANTI_ONBELLEK[id];
   if (c && Date.now() - c.t < 10 * 60 * 1000) return Promise.resolve(c.meta);   // 10 dk içindeki taze sonuç
   var kesin = new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 10000); });
-  return Promise.race([hedgeMeta({ id: id }, ['embed', 'dk', 'page-d', 'page-m'], 2000), kesin]).then(function (m) {
+  return Promise.race([hedgeMeta({ id: id }, ['embed', 'dk', 'page-d', 'page-m'], 900), kesin]).then(function (m) {
     if (m) GARANTI_ONBELLEK[id] = { t: Date.now(), meta: m };
     return m || (c ? c.meta : null);   // hepsi başarısızsa son bilinen sonuç
   });
@@ -1522,7 +1539,7 @@ function garantiAkislar(girdiler) {
         res[gi] = l || [];
         bitenler++;
         if (bitenler >= girdiler.length) kapat();
-        else if (l && l.length && !t) t = setTimeout(kapat, 2000);   // biri hazır: ötekiler için en fazla 2 sn daha bekle
+        else if (l && l.length && !t) t = setTimeout(kapat, 800);   // biri hazır: ötekiler için en fazla 2 sn daha bekle
       });
     });
   });
@@ -1532,7 +1549,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   holder = holder || { partial: [] };
   if (mediaType !== 'movie') return Promise.resolve([]);
   var gIds = garantiGirdileri(tmdbId, mediaType).map(function (e) { return String(e.id); });   // garanti yolu zaten bunları çekiyor
-  dbg = ['okru v1.1.0'];
+  dbg = ['okru v1.2.0'];
   var T0 = Date.now();
   var base = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
 
@@ -1733,7 +1750,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
             itemSt.push({ name: AYAR.EKLENTI_ADI + ' - ' + x.r.lang + ' ' + v.h + 'p', title: lb.join(' | '), url: v.url, quality: v.h + 'p', headers: { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE }, provider: PROVIDER_ID });
           });
           // aynı videonun akışları en yüksek çözünürlükten düşüğe (HLS Auto en sonda)
-          itemSt.sort(function (a, b) { return heightOf(b.quality) - heightOf(a.quality); });
+          itemSt = hizliSirala(itemSt.map(function (q) { q.title = String(q.title).replace(' | \u26A1 Hızlı başlangıç', ''); return q; }));
           itemSt.forEach(function (s) { streams.push(s); });
         });
         dbg.push('bitti ' + (Date.now() - T0) + 'ms');
@@ -1770,7 +1787,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
     }
     gp.then(function (gg) {
       g = gg;
-      if (gg.length && !done) grace = setTimeout(function () { finish('arama beklenmedi'); }, 12000);
+      if (gg.length && !done) grace = setTimeout(function () { finish('arama beklenmedi'); }, AYAR.GARANTI_BEKLE || 2500);
       else if (innerReady) finish('bitti');
     });
     var innerReady = false;

@@ -7,11 +7,11 @@
 
 var AYAR = {
   SITE: 'https://ok.ru',
-  EKLENTI_ADI: 'ok.ru',
+  EKLENTI_ADI: 'okru',   // manifest adıyla AYNI: akış kartında eklenti adı hep görünsün
   // true iken akış çıkmazsa neden çıkmadığını yazan "DEBUG" satırları görünür. Her şey çalışınca false yap.
   // ok.ru'nun kendi arama/profil sayfaları artık boş JS kabuğu döndürüyor (v1.0.9: arama motorları + video sayfası metadata'sı ile doğrulama)
   MOTOR_SORGU: 10,   // arama motorlarına en fazla kaç sorgu gitsin; MOTOR_SURE: bu aşamanın üst sınırı (ms)
-  MOTOR_SURE: 11000,
+  MOTOR_SURE: 7500,
   ARAMA_MOTORU: true,
   DEBUG_MODU: false,
   MAX_ADAY: 20,
@@ -46,9 +46,10 @@ var AYAR = {
   HESAP_SAYFA: 0,
   BELIRSIZ_GOSTER: true,  // dili doğrulanamayan adaylar "Dil ?" etiketiyle en sona eklensin
   MAX_BELIRSIZ: 12,
-  ARAMA_SURESI: 12000,  // ms
-  GENEL_SURE: 36000,    // ms
-  KAYNAK_SURESI: 5000  // ms
+  ARAMA_SURESI: 8000,  // ms
+  GENEL_SURE: 26000,    // ms: dolunca o ana kadar bulunan akışlar VERİLİR (boş dönmez)
+  KAYNAK_SURESI: 4500, // ms
+  MOTOR_ADAY: 16       // arama motorundan gelen en fazla kaç video doğrulansın
 };
 
 // Türkçe adı TMDB'de görünmeyen / farklı yazılan filmler: orijinal ad (harf-rakam, küçük) -> Türkçe adlar
@@ -1080,7 +1081,9 @@ function engineQueries(host, titles, trTitles, year) {
   var trs = uniq((trTitles || []).map(clean).filter(Boolean)).slice(0, 3);
   var ens = uniq((titles || []).map(clean).filter(Boolean)).filter(function (n) { return trs.indexOf(n) === -1; }).slice(0, 2);
   var names = uniq([ens[0], trs[0], trs[1], ens[1], trs[2]].filter(Boolean)), qs = [];
-  // elle yapılan çalışan sorgular önce: "<ad> tr ok.ru" (örn. "Yeşil dev tr ok.ru", "alice sweet alice tr ok.ru")
+  // senin elle yazdığın çalışan sorgu en önce: kısa ad + "tr ok.ru" (örn. "rambo tr ok.ru")
+  uniq([firstWordOf(trs[0]), firstWordOf(ens[0])].filter(Boolean)).forEach(function (w) { qs.push(w + ' tr ' + hw); });
+  // "<ad> tr ok.ru" (örn. "Yeşil dev tr ok.ru", "alice sweet alice tr ok.ru")
   names.slice(0, 3).forEach(function (n) { qs.push(n + ' tr ' + hw); });
   trs.slice(0, 2).forEach(function (n) {   // 'yeşildev tr ok.ru' gibi bitişik yazım da denenir (Türkçe adlar)
     var sq = n.toLowerCase().replace(/\s+/g, '');
@@ -1100,9 +1103,10 @@ function engineQueries(host, titles, trTitles, year) {
 // DuckDuckGo (202/anomali), Brave (429) ve yandex.com (captcha) bu ağda hep engellendiği için çıkarıldı.
 function engineUrls(q, qi) {
   var e = encodeURIComponent(q), out = [];
+  if (qi < 4) out.push('https://yandex.com.tr/search/touch/?text=' + e.replace(/%20/g, '+') + '&lr=11508');   // mobil Yandex (telefonunda çalışan)
+  if (qi < 4) out.push('https://www.google.com/search?q=' + e + '&hl=tr&source=hp');                          // mobil Google (telefonunda çalışan)
   out.push('https://www.google.com/search?q=' + e + '&hl=tr&num=30&gbv=1');
   out.push('https://www.bing.com/search?q=' + e + '&setlang=tr&count=30');
-  if (qi < 4) out.push('https://yandex.com.tr/search/touch/?text=' + e.replace(/%20/g, '+') + '&lr=103841');
   if (qi < 2) out.push('https://www.google.com/search?tbm=vid&q=' + e + '&hl=tr&num=30');
   return out;
 }
@@ -1320,7 +1324,7 @@ function makeStreams(item, ranked, meta) {
   }).filter(function (v) { return /^https?:\/\//.test(v.url); });
   vids.sort(function (a, b) { return b.h - a.h; });
 
-  var parts = ['ok.ru', ranked.lang];
+  var parts = [AYAR.EKLENTI_ADI, ranked.lang];
   if (ranked.info.part) parts.push('Part ' + ranked.info.part);
   var dur = fmtDur(item.dur);
   var headers = { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE };
@@ -1330,13 +1334,13 @@ function makeStreams(item, ranked, meta) {
     var hx = parts.concat(['HLS Auto']);
     if (dur) hx.push(dur);
     if (AYAR.DEBUG_MODU) hx.push('[' + item.title.slice(0, 60) + ']');
-    extras.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: hx.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
+    extras.push({ name: AYAR.EKLENTI_ADI + ' - ' + ranked.lang + ' HLS', title: hx.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
   }
   if (meta.dash) {
     var dx = parts.concat(['DASH Auto' + (meta.dashMax ? ' (en çok ' + meta.dashMax + 'p)' : '')]);
     if (dur) dx.push(dur);
     if (AYAR.DEBUG_MODU) dx.push('[' + item.title.slice(0, 60) + ']');
-    extras.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: dx.join(' | '), url: meta.dash, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
+    extras.push({ name: AYAR.EKLENTI_ADI + ' - ' + ranked.lang + ' DASH', title: dx.join(' | '), url: meta.dash, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
   }
   if (!vids.length) return extras;
 
@@ -1347,7 +1351,7 @@ function makeStreams(item, ranked, meta) {
     if (dur) label.push(dur);
     if (AYAR.DEBUG_MODU) label.push('[' + item.title.slice(0, 60) + ']');
     return {
-      name: AYAR.EKLENTI_ADI + ' ' + ranked.lang,
+      name: AYAR.EKLENTI_ADI + ' - ' + ranked.lang + ' ' + (v.key || 'Auto'),
       title: label.join(' | '),
       url: v.url,
       quality: v.key || 'Auto',
@@ -1505,7 +1509,7 @@ function garantiAkislar(girdiler) {
       res.forEach(function (l) {                                   // birden çok dosya çıktıysa ayırt etmek için numarala
         if (!l.length) return;
         k++;
-        if (dolu > 1) l.forEach(function (s) { s.name = String(s.name).replace(/ TR$/, ' TR #' + k); s.title = String(s.title).replace('| TR |', '| TR #' + k + ' |'); });
+        if (dolu > 1) l.forEach(function (s) { s.name = String(s.name).replace(' - TR ', ' - TR #' + k + ' '); s.title = String(s.title).replace('| TR |', '| TR #' + k + ' |'); });
       });
       resolve(res.reduce(function (a, l) { return a.concat(l); }, []));
     }
@@ -1524,10 +1528,11 @@ function garantiAkislar(girdiler) {
   });
 }
 
-function getStreamsInner(tmdbId, mediaType, season, episode) {
+function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
+  holder = holder || { partial: [] };
   if (mediaType !== 'movie') return Promise.resolve([]);
   var gIds = garantiGirdileri(tmdbId, mediaType).map(function (e) { return String(e.id); });   // garanti yolu zaten bunları çekiyor
-  dbg = ['okru v1.0.18'];
+  dbg = ['okru v1.1.0'];
   var T0 = Date.now();
   var base = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
 
@@ -1651,14 +1656,14 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
         var cands = [], sn = {};
         engSink.forEach(function (it) { if (!seen[it.path] && !sn[it.path]) { sn[it.path] = 1; cands.push(it); } });
         dbg.push('motor aday ' + cands.length);
-        return waitWithin(cands.slice(0, 40).map(function (it) {
+        return waitWithin(cands.slice(0, AYAR.MOTOR_ADAY || 16).map(function (it) {
           return fetchMeta(it).then(function (m) {
             if (!m) return;
             if (!m.title) { dbg.push('motor baslik yok ' + it.id); return; }
             seen[it.path] = true;
             all.push({ path: it.path, id: it.id, title: m.title, durText: '', dur: m.dur, desc: m.desc, metaHazir: m });
           }, function () {});
-        }), 9000).then(function () { rankAll(); dbg.push('motor sonrasi aday ' + ranked.length); });
+        }), ranked.some(function (x) { return !x.r.maybe; }) ? 3500 : 6500).then(function () { rankAll(); dbg.push('motor sonrasi aday ' + ranked.length); });
       }
       return scanP.then(function () {
         if (accs.length) { rankAll(); dbg.push('hesap sonrasi aday ' + ranked.length); }
@@ -1677,6 +1682,13 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
       var tMeta = Date.now();
       return waitWithin(metaJobs.slice(0, sure.length), AYAR.KAYNAK_SURESI)
         .then(function () {
+          // ilk kaynaklar hazır: süre dolarsa en azından bunlar verilsin (boş dönüp eklenti adı kaybolmasın)
+          var pst = [], pu = {};
+          top.forEach(function (x, i) {
+            if (!metas[i] || x.r.maybe) return;
+            try { makeStreams(x.item, x.r, metas[i]).forEach(function (s) { if (!pu[s.url]) { pu[s.url] = 1; pst.push(s); } }); } catch (e) {}
+          });
+          if (pst.length) holder.partial = pst;
           var kalan = Math.max(700, AYAR.KAYNAK_SURESI - (Date.now() - tMeta));   // belirsizlere de tam süre
           return waitWithin(metaJobs.slice(sure.length), kalan);
         }).then(function () {
@@ -1687,7 +1699,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
             if (!m || m.hls || m.dash || maxH(m) >= 1080 || enrich.length >= 6) return;
             enrich.push(fetchMetaOne(x.item, 'page-d').then(function (b) { metas[i] = mergeMeta(m, b); }, function () {}));
           });
-          return waitWithin(enrich, 4500);
+          return waitWithin(enrich, 3500);
         }).then(function () {
           // HLS ana listesindeki tüm çözünürlükleri (2160p, 1440p, 1080p, 720p...) ayrı akış yap
           var hjobs = [], hlsVars = {};
@@ -1697,7 +1709,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
             if (m.hls) hjobs.push(expandHls(m, x.item).then(function (v) { hlsVars[i] = v; }, function () {}));
             if (m.dash) hjobs.push(expandDash(m, x.item).then(function () {}, function () {}));
           });
-          return waitWithin(hjobs, 4500).then(function () { return hlsVars; });
+          return waitWithin(hjobs, 3500).then(function () { return hlsVars; });
         }).then(function (hlsVars) {
         var streams = [], seenUrl = {};
         top.forEach(function (x, i) {
@@ -1715,10 +1727,10 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
           (hlsVars[i] || []).forEach(function (v) {
             if (!v.h || mp4h[v.h] || seenUrl[v.url]) return;
             seenUrl[v.url] = true;
-            var lb = ['ok.ru', x.r.lang]; if (x.r.info && x.r.info.part) lb.push('Part ' + x.r.info.part);
+            var lb = [AYAR.EKLENTI_ADI, x.r.lang]; if (x.r.info && x.r.info.part) lb.push('Part ' + x.r.info.part);
             lb.push(v.h + 'p HLS'); if (fmtDur(x.item.dur)) lb.push(fmtDur(x.item.dur));
             if (AYAR.DEBUG_MODU) lb.push('[' + x.item.title.slice(0, 60) + ']');
-            itemSt.push({ name: AYAR.EKLENTI_ADI + ' ' + x.r.lang, title: lb.join(' | '), url: v.url, quality: v.h + 'p', headers: { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE }, provider: PROVIDER_ID });
+            itemSt.push({ name: AYAR.EKLENTI_ADI + ' - ' + x.r.lang + ' ' + v.h + 'p', title: lb.join(' | '), url: v.url, quality: v.h + 'p', headers: { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE }, provider: PROVIDER_ID });
           });
           // aynı videonun akışları en yüksek çözünürlükten düşüğe (HLS Auto en sonda)
           itemSt.sort(function (a, b) { return heightOf(b.quality) - heightOf(a.quality); });
@@ -1730,7 +1742,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
       });
       });
     });
-  }).catch(function (e) { return debugStream('hata ' + (e && e.message)); });
+  }).catch(function (e) { return holder.partial.length ? holder.partial : debugStream('hata ' + (e && e.message)); });
 }
 
 // Garanti akışlar normal aramadan BAĞIMSIZ çalışır; hazır olunca arama için en fazla 2,5 sn daha beklenir.
@@ -1746,23 +1758,23 @@ function getStreams(tmdbId, mediaType, season, episode) {
     return out;
   }
   return new Promise(function (resolve) {
-    var done = false, g = [], inner = null, grace = null;
+    var done = false, g = [], inner = null, grace = null, holder = { partial: [] };
     var tmr = setTimeout(function () { finish('zaman asimi'); }, AYAR.GENEL_SURE);
     function finish(why) {
       if (done) return;
       done = true; clearTimeout(tmr); clearTimeout(grace);
-      var extra = inner || (AYAR.DEBUG_MODU ? debugStream(why + ' garanti=' + g.length) : []);
+      var extra = inner || (holder.partial.length ? holder.partial : (AYAR.DEBUG_MODU ? debugStream(why + ' garanti=' + g.length) : []));
       var gercek = g.concat(extra).filter(function (s) { return s && s.url !== 'https://debug.invalid/'; });
       if (gercek.length) { resolve(birlestir(g, extra.filter(function (s) { return s && s.url !== 'https://debug.invalid/'; }))); return; }   // gerçek akış varsa DEBUG satırları gösterilmez
       resolve(birlestir(g, AYAR.DEBUG_MODU ? extra.concat([{ name: 'DEBUG garanti akis: ' + g.length, title: 'DEBUG garanti akis: ' + g.length, url: 'https://debug.invalid/', quality: 'Auto', provider: PROVIDER_ID }]) : extra));
     }
     gp.then(function (gg) {
       g = gg;
-      if (gg.length && !done) grace = setTimeout(function () { finish('arama beklenmedi'); }, 14000);
+      if (gg.length && !done) grace = setTimeout(function () { finish('arama beklenmedi'); }, 12000);
       else if (innerReady) finish('bitti');
     });
     var innerReady = false;
-    getStreamsInner(tmdbId, mediaType, season, episode).then(function (r) { return r; }, function () { return []; }).then(function (r) {
+    getStreamsInner(tmdbId, mediaType, season, episode, holder).then(function (r) { return r; }, function () { return []; }).then(function (r) {
       inner = r; innerReady = true;
       gp.then(function () { finish('bitti'); });
     });

@@ -27,7 +27,10 @@ var AYAR = {
     { tmdb: 218, adlar: ['The Terminator', 'Terminator', 'Terminatör'], yil: 1984, dosya: 'Terminator.1.1984-Filmsarayi.net', id: '1189269146174' },
     // tmdb 1368 = First Blood / Rambo İlk Kan (1982)
     { tmdb: 1368, adlar: ['First Blood', 'Rambo First Blood', 'Rambo İlk Kan', 'İlk Kan'], yil: 1982, dosya: 'Rambo.Ilk.Kan.Beyaz.TV', id: '11402194193016' },
-    { tmdb: 1368, adlar: ['First Blood', 'Rambo First Blood', 'Rambo İlk Kan', 'İlk Kan'], yil: 1982, dosya: 'Ilk.Kan.ok2', id: '10001072654964' }
+    { tmdb: 1368, adlar: ['First Blood', 'Rambo First Blood', 'Rambo İlk Kan', 'İlk Kan'], yil: 1982, dosya: 'Ilk.Kan.ok2', id: '10001072654964' },
+    // tmdb 1724 = The Incredible Hulk (2008) / Yeşil Dev
+    { tmdb: 1724, adlar: ['The Incredible Hulk', 'İnanılmaz Hulk', 'Yeşil Dev', 'Yeşil Dev Hulk'], yil: 2008, dosya: 'Yesil.Dev.Hulk.TR.Dublaj.HD.2008', id: '357648699796' },
+    { tmdb: 1724, adlar: ['The Incredible Hulk', 'İnanılmaz Hulk', 'Yeşil Dev', 'Yeşil Dev Hulk 2'], yil: 2008, dosya: 'Yesil.Dev.Hulk.2.izle', id: '7225761139269' }
   ],
   ENGEL: [],
   // Kişisel sayfa / grup / topluluk: ok.ru'nun kendi araması bu videoları göstermese bile buradan taranır.
@@ -306,7 +309,7 @@ var TR_ALIAS_EK = [
   ["A Kid in Aladdin's Palace", ["Alaaddin'in Sarayı", "Alaaddin'in Sarayında Bir Çocuk"]],
   ['The Tuxedo', ['Smokin']],
   ['Hulk', ['Yeşil Dev', 'Yeşil Dev Hulk', 'Hulk Yeşil Dev']],
-  ['The Incredible Hulk|Incredible Hulk', ['İnanılmaz Hulk', 'Yeşil Dev', 'Yeşil Dev Hulk', 'Yeşil Dev Hulk 2', 'Hulk 2']],
+  ['The Incredible Hulk|Incredible Hulk', ['Yeşil Dev', 'İnanılmaz Hulk', 'Yeşil Dev Hulk', 'Yeşil Dev Hulk 2', 'Hulk 2']],
   ['Batman Begins', ['Batman Başlıyor']],
   ['The Dark Knight', ['Kara Şövalye']],
   ['The Dark Knight Rises', ['Kara Şövalye Yükseliyor']],
@@ -1079,7 +1082,7 @@ function engineQueries(host, titles, trTitles, year) {
   var names = uniq([ens[0], trs[0], trs[1], ens[1], trs[2]].filter(Boolean)), qs = [];
   // elle yapılan çalışan sorgular önce: "<ad> tr ok.ru" (örn. "Yeşil dev tr ok.ru", "alice sweet alice tr ok.ru")
   names.slice(0, 3).forEach(function (n) { qs.push(n + ' tr ' + hw); });
-  names.slice(0, 2).forEach(function (n) {   // 'yeşildev tr ok.ru' gibi bitişik yazım da denenir
+  trs.slice(0, 2).forEach(function (n) {   // 'yeşildev tr ok.ru' gibi bitişik yazım da denenir (Türkçe adlar)
     var sq = n.toLowerCase().replace(/\s+/g, '');
     if (/\s/.test(n) && sq.length >= 6) qs.push(sq + ' tr ' + hw);
   });
@@ -1157,9 +1160,10 @@ function buildMeta(md) {
     return { url: v.url, key: h ? h + 'p' : (v.name || '') };
   });
   var hls = md.hlsManifestUrl || md.hlsMasterPlaylistUrl || md.ondemandHls || '';
-  if (!vids.length && !hls) return null;
+  var dash = md.ondemandDash || md.dashManifestUrl || md.ondemandDashUrl || md.dashUrl || '';   // VK Video kaynaklı videolarda yüksek kaliteler burada (.mpd)
+  if (!vids.length && !hls && !dash) return null;
   var mv = (md.movie && typeof md.movie === 'object') ? md.movie : {};
-  return { videos: vids, hls: hls, cookie: '', meta: md, raw: md, desc: String(mv.description || mv.descr || md.description || '').slice(0, 400), title: String(mv.title || md.title || ''), dur: parseInt(mv.duration || md.duration, 10) || 0 };
+  return { videos: vids, hls: hls, dash: dash, cookie: '', meta: md, raw: md, desc: String(mv.description || mv.descr || md.description || '').slice(0, 400), title: String(mv.title || md.title || ''), dur: parseInt(mv.duration || md.duration, 10) || 0 };
 }
 
 function metaFromHtml(html) {
@@ -1254,6 +1258,7 @@ function mergeMeta(a, b) {
   (a.videos || []).forEach(function (v) { have[heightOf(v.key)] = 1; });
   (b.videos || []).forEach(function (v) { var h = heightOf(v.key); if (!have[h]) { have[h] = 1; a.videos.push(v); } });
   if (!a.hls && b.hls) a.hls = b.hls;
+  if (!a.dash && b.dash) a.dash = b.dash;
   return a;
 }
 function absUrl(u, base) {
@@ -1284,6 +1289,22 @@ function parseHlsMaster(text, base) {
   out.sort(function (a, b) { return (b.h - a.h) || (b.bw - a.bw); });
   return out;
 }
+function expandDash(meta, item) {
+  var headers = { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE };
+  return getRaw(meta.dash, headers, 'VD' + String(item.id).slice(-4), { timeout: 5000 }).then(function (r) {
+    var best = 0, re = /<Representation\b[^>]*>/gi, m;
+    while (r.ok && (m = re.exec(r.text || '')) !== null) {
+      var w = parseInt((m[0].match(/\bwidth="(\d+)"/) || [])[1], 10) || 0, h = parseInt((m[0].match(/\bheight="(\d+)"/) || [])[1], 10) || 0;
+      var L = Math.max(w, h);
+      if (!L) continue;
+      var nom = L >= 3400 ? 2160 : L >= 2400 ? 1440 : L >= 1700 ? 1080 : L >= 1100 ? 720 : L >= 800 ? 480 : L >= 560 ? 360 : L >= 380 ? 240 : 144;
+      if (nom > best) best = nom;
+    }
+    meta.dashMax = best;
+    return best;
+  });
+}
+
 function expandHls(meta, item) {
   var headers = { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE };
   return getRaw(meta.hls, headers, 'VH' + String(item.id).slice(-4), { timeout: 5000 }).then(function (r) {
@@ -1304,24 +1325,23 @@ function makeStreams(item, ranked, meta) {
   var dur = fmtDur(item.dur);
   var headers = { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE };
 
-  if (!vids.length) {
-    if (!meta.hls) return [];
-    var hl = parts.concat(['HLS']);
-    if (dur) hl.push(dur);
-    if (AYAR.DEBUG_MODU) hl.push('[' + item.title.slice(0, 60) + ']');
-    return [{ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: hl.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID }];
-  }
-
-  // videonun TÜM çözünürlükleri (en yüksekten düşüğe)
-  var picks = vids;
-  var hlsExtra = [];
+  var extras = [];
   if (meta.hls) {
     var hx = parts.concat(['HLS Auto']);
     if (dur) hx.push(dur);
     if (AYAR.DEBUG_MODU) hx.push('[' + item.title.slice(0, 60) + ']');
-    hlsExtra.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: hx.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
+    extras.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: hx.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
   }
+  if (meta.dash) {
+    var dx = parts.concat(['DASH Auto' + (meta.dashMax ? ' (en çok ' + meta.dashMax + 'p)' : '')]);
+    if (dur) dx.push(dur);
+    if (AYAR.DEBUG_MODU) dx.push('[' + item.title.slice(0, 60) + ']');
+    extras.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: dx.join(' | '), url: meta.dash, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
+  }
+  if (!vids.length) return extras;
 
+  // videonun TÜM çözünürlükleri (en yüksekten düşüğe)
+  var picks = vids;
   return picks.map(function (v) {
     var label = parts.concat([v.key || 'Auto']);
     if (dur) label.push(dur);
@@ -1335,7 +1355,7 @@ function makeStreams(item, ranked, meta) {
       headers: headers,
       provider: PROVIDER_ID
     };
-  }).concat(hlsExtra);
+  }).concat(extras);
 }
 
 // ============================================================
@@ -1507,7 +1527,7 @@ function garantiAkislar(girdiler) {
 function getStreamsInner(tmdbId, mediaType, season, episode) {
   if (mediaType !== 'movie') return Promise.resolve([]);
   var gIds = garantiGirdileri(tmdbId, mediaType).map(function (e) { return String(e.id); });   // garanti yolu zaten bunları çekiyor
-  dbg = ['okru v1.0.17'];
+  dbg = ['okru v1.0.18'];
   var T0 = Date.now();
   var base = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
 
@@ -1664,7 +1684,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
           var enrich = [];
           top.forEach(function (x, i) {
             var m = metas[i];
-            if (!m || m.hls || maxH(m) >= 1080 || enrich.length >= 6) return;
+            if (!m || m.hls || m.dash || maxH(m) >= 1080 || enrich.length >= 6) return;
             enrich.push(fetchMetaOne(x.item, 'page-d').then(function (b) { metas[i] = mergeMeta(m, b); }, function () {}));
           });
           return waitWithin(enrich, 4500);
@@ -1673,8 +1693,9 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
           var hjobs = [], hlsVars = {};
           top.forEach(function (x, i) {
             var m = metas[i];
-            if (!m || !m.hls || hjobs.length >= 8) return;
-            hjobs.push(expandHls(m, x.item).then(function (v) { hlsVars[i] = v; }, function () {}));
+            if (!m || hjobs.length >= 10) return;
+            if (m.hls) hjobs.push(expandHls(m, x.item).then(function (v) { hlsVars[i] = v; }, function () {}));
+            if (m.dash) hjobs.push(expandDash(m, x.item).then(function () {}, function () {}));
           });
           return waitWithin(hjobs, 4500).then(function () { return hlsVars; });
         }).then(function (hlsVars) {

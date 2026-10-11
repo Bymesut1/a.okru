@@ -13,7 +13,7 @@ var AYAR = {
   MOTOR_SORGU: 10,   // arama motorlarına en fazla kaç sorgu gitsin; MOTOR_SURE: bu aşamanın üst sınırı (ms)
   MOTOR_SURE: 11000,
   ARAMA_MOTORU: true,
-  DEBUG_MODU: true,
+  DEBUG_MODU: false,
   MAX_ADAY: 20,
   MIN_SURE: 1200,   // sn: bundan kısa videolar (fragman/kesit/çizgi film klibi) hariç; süre uyumu ARANMAZ. 0 yaparsan hiç eleme olmaz     // en fazla kaç aday video için kaynak çekilsin
   MAX_SORGU: 2,   // ok.ru'nun kendi araması boş kabuk döndürüyor (kanıtlı): çok sorgu göndermek ağı boşuna dolduruyor; asıl arama motorlarından   // en fazla kaç arama yapılsın (öncelik sırasıyla)

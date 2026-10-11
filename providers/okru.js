@@ -306,7 +306,7 @@ var TR_ALIAS_EK = [
   ["A Kid in Aladdin's Palace", ["Alaaddin'in Sarayı", "Alaaddin'in Sarayında Bir Çocuk"]],
   ['The Tuxedo', ['Smokin']],
   ['Hulk', ['Yeşil Dev', 'Yeşil Dev Hulk', 'Hulk Yeşil Dev']],
-  ['The Incredible Hulk|Incredible Hulk', ['İnanılmaz Hulk', 'Yeşil Dev', 'Yeşil Dev Hulk']],
+  ['The Incredible Hulk|Incredible Hulk', ['İnanılmaz Hulk', 'Yeşil Dev', 'Yeşil Dev Hulk', 'Yeşil Dev Hulk 2', 'Hulk 2']],
   ['Batman Begins', ['Batman Başlıyor']],
   ['The Dark Knight', ['Kara Şövalye']],
   ['The Dark Knight Rises', ['Kara Şövalye Yükseliyor']],
@@ -1079,6 +1079,10 @@ function engineQueries(host, titles, trTitles, year) {
   var names = uniq([ens[0], trs[0], trs[1], ens[1], trs[2]].filter(Boolean)), qs = [];
   // elle yapılan çalışan sorgular önce: "<ad> tr ok.ru" (örn. "Yeşil dev tr ok.ru", "alice sweet alice tr ok.ru")
   names.slice(0, 3).forEach(function (n) { qs.push(n + ' tr ' + hw); });
+  names.slice(0, 2).forEach(function (n) {   // 'yeşildev tr ok.ru' gibi bitişik yazım da denenir
+    var sq = n.toLowerCase().replace(/\s+/g, '');
+    if (/\s/.test(n) && sq.length >= 6) qs.push(sq + ' tr ' + hw);
+  });
   if (y) names.slice(0, 2).forEach(function (n) { qs.push(n + y + ' tr ' + hw); });
   names.slice(0, 2).forEach(function (n) { qs.push(n + y + ' türkçe dublaj ' + hw); });
   names.slice(3).forEach(function (n) { qs.push(n + ' tr ' + hw); });
@@ -1240,6 +1244,53 @@ function fmtDur(sec) {
   return (h ? h + ':' + p(m) : m) + ':' + p(s);
 }
 
+// ---- HLS: bazı videolarda (örn. VK Video'dan gelenler) mp4 listesi 144-360p ile sınırlı; 720p-2160p sadece HLS ana listesinde olur ----
+function maxH(m) {
+  return Math.max.apply(null, [0].concat(((m && m.videos) || []).map(function (v) { return heightOf(v.key); })));
+}
+function mergeMeta(a, b) {
+  if (!a || !b) return a || b;
+  var have = {};
+  (a.videos || []).forEach(function (v) { have[heightOf(v.key)] = 1; });
+  (b.videos || []).forEach(function (v) { var h = heightOf(v.key); if (!have[h]) { have[h] = 1; a.videos.push(v); } });
+  if (!a.hls && b.hls) a.hls = b.hls;
+  return a;
+}
+function absUrl(u, base) {
+  u = String(u || '').trim();
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.indexOf('//') === 0) return 'https:' + u;
+  var m = String(base).match(/^(https?:\/\/[^\/]+)/i);
+  if (u.charAt(0) === '/') return (m ? m[1] : '') + u;
+  return String(base).replace(/[?#].*$/, '').replace(/\/[^\/]*$/, '/') + u;
+}
+function parseHlsMaster(text, base) {
+  var lines = String(text || '').split(/\r?\n/), best = {}, out = [];
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf('#EXT-X-STREAM-INF') !== 0) continue;
+    var rm = lines[i].match(/RESOLUTION=(\d+)x(\d+)/), bw = parseInt((lines[i].match(/BANDWIDTH=(\d+)/) || [])[1], 10) || 0;
+    var j = i + 1;
+    while (j < lines.length && (!lines[j].trim() || lines[j].charAt(0) === '#')) j++;
+    if (j >= lines.length) continue;
+    var h = 0;
+    if (rm) {                                   // uzun kenara göre isimsel çözünürlük (1920x804 -> 1080p)
+      var L = Math.max(parseInt(rm[1], 10), parseInt(rm[2], 10));
+      h = L >= 3400 ? 2160 : L >= 2400 ? 1440 : L >= 1700 ? 1080 : L >= 1100 ? 720 : L >= 800 ? 480 : L >= 560 ? 360 : L >= 380 ? 240 : 144;
+    }
+    var key = h || ('bw' + bw);
+    if (!best[key] || bw > best[key].bw) best[key] = { url: absUrl(lines[j], base), h: h, bw: bw };
+  }
+  Object.keys(best).forEach(function (k) { out.push(best[k]); });
+  out.sort(function (a, b) { return (b.h - a.h) || (b.bw - a.bw); });
+  return out;
+}
+function expandHls(meta, item) {
+  var headers = { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE };
+  return getRaw(meta.hls, headers, 'VH' + String(item.id).slice(-4), { timeout: 5000 }).then(function (r) {
+    return r.ok ? parseHlsMaster(r.text, meta.hls) : [];
+  });
+}
+
 function makeStreams(item, ranked, meta) {
   var vids = (meta.videos || []).map(function (v) {
     var u = decodeHtml(String(v.url || '')).replace(/\\\//g, '/');
@@ -1263,6 +1314,13 @@ function makeStreams(item, ranked, meta) {
 
   // videonun TÜM çözünürlükleri (en yüksekten düşüğe)
   var picks = vids;
+  var hlsExtra = [];
+  if (meta.hls) {
+    var hx = parts.concat(['HLS Auto']);
+    if (dur) hx.push(dur);
+    if (AYAR.DEBUG_MODU) hx.push('[' + item.title.slice(0, 60) + ']');
+    hlsExtra.push({ name: AYAR.EKLENTI_ADI + ' ' + ranked.lang, title: hx.join(' | '), url: meta.hls, quality: 'Auto', headers: headers, provider: PROVIDER_ID });
+  }
 
   return picks.map(function (v) {
     var label = parts.concat([v.key || 'Auto']);
@@ -1277,7 +1335,7 @@ function makeStreams(item, ranked, meta) {
       headers: headers,
       provider: PROVIDER_ID
     };
-  });
+  }).concat(hlsExtra);
 }
 
 // ============================================================
@@ -1449,7 +1507,7 @@ function garantiAkislar(girdiler) {
 function getStreamsInner(tmdbId, mediaType, season, episode) {
   if (mediaType !== 'movie') return Promise.resolve([]);
   var gIds = garantiGirdileri(tmdbId, mediaType).map(function (e) { return String(e.id); });   // garanti yolu zaten bunları çekiyor
-  dbg = ['okru v1.0.15'];
+  dbg = ['okru v1.0.17'];
   var T0 = Date.now();
   var base = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
 
@@ -1602,6 +1660,24 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
           var kalan = Math.max(700, AYAR.KAYNAK_SURESI - (Date.now() - tMeta));   // belirsizlere de tam süre
           return waitWithin(metaJobs.slice(sure.length), kalan);
         }).then(function () {
+          // düşük kalitede kalanlar için masaüstü sayfasından yüksek çözünürlük/HLS bilgisini ekle
+          var enrich = [];
+          top.forEach(function (x, i) {
+            var m = metas[i];
+            if (!m || m.hls || maxH(m) >= 1080 || enrich.length >= 6) return;
+            enrich.push(fetchMetaOne(x.item, 'page-d').then(function (b) { metas[i] = mergeMeta(m, b); }, function () {}));
+          });
+          return waitWithin(enrich, 4500);
+        }).then(function () {
+          // HLS ana listesindeki tüm çözünürlükleri (2160p, 1440p, 1080p, 720p...) ayrı akış yap
+          var hjobs = [], hlsVars = {};
+          top.forEach(function (x, i) {
+            var m = metas[i];
+            if (!m || !m.hls || hjobs.length >= 8) return;
+            hjobs.push(expandHls(m, x.item).then(function (v) { hlsVars[i] = v; }, function () {}));
+          });
+          return waitWithin(hjobs, 4500).then(function () { return hlsVars; });
+        }).then(function (hlsVars) {
         var streams = [], seenUrl = {};
         top.forEach(function (x, i) {
           if (!metas[i]) { dbg.push('meta yok ' + x.item.path); return; }
@@ -1610,9 +1686,22 @@ function getStreamsInner(tmdbId, mediaType, season, episode) {
             else if (AYAR.BELIRSIZ_GOSTER) { x.r.lang = 'Dil ?'; x.r.tier = 3; }
             else { dbg.push('dil belirsiz ' + x.item.title.slice(0, 30)); return; }
           }
+          var mp4h = {}, itemSt = [];
+          (metas[i].videos || []).forEach(function (v) { mp4h[heightOf(v.key)] = 1; });
           makeStreams(x.item, x.r, metas[i]).forEach(function (s) {
-            if (!seenUrl[s.url]) { seenUrl[s.url] = true; streams.push(s); }
+            if (!seenUrl[s.url]) { seenUrl[s.url] = true; itemSt.push(s); }
           });
+          (hlsVars[i] || []).forEach(function (v) {
+            if (!v.h || mp4h[v.h] || seenUrl[v.url]) return;
+            seenUrl[v.url] = true;
+            var lb = ['ok.ru', x.r.lang]; if (x.r.info && x.r.info.part) lb.push('Part ' + x.r.info.part);
+            lb.push(v.h + 'p HLS'); if (fmtDur(x.item.dur)) lb.push(fmtDur(x.item.dur));
+            if (AYAR.DEBUG_MODU) lb.push('[' + x.item.title.slice(0, 60) + ']');
+            itemSt.push({ name: AYAR.EKLENTI_ADI + ' ' + x.r.lang, title: lb.join(' | '), url: v.url, quality: v.h + 'p', headers: { 'User-Agent': ANDROID_UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE }, provider: PROVIDER_ID });
+          });
+          // aynı videonun akışları en yüksek çözünürlükten düşüğe (HLS Auto en sonda)
+          itemSt.sort(function (a, b) { return heightOf(b.quality) - heightOf(a.quality); });
+          itemSt.forEach(function (s) { streams.push(s); });
         });
         dbg.push('bitti ' + (Date.now() - T0) + 'ms');
         if (!streams.length) return debugStream('kaynak cikmadi');
